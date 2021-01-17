@@ -417,15 +417,6 @@ uuid:depends({ type = "V2ray", protocol = "vless" })
 alter_id = s:option(Value, "alter_id", translate("Alter ID"))
 alter_id:depends("protocol", "vmess")
 
-level = s:option(Value, "level", translate("User Level"))
-level.default = 1
-level:depends({ type = "Xray", protocol = "vmess" })
-level:depends({ type = "Xray", protocol = "vless" })
-level:depends({ type = "Xray", protocol = "trojan" })
-level:depends({ type = "V2ray", protocol = "vmess" })
-level:depends({ type = "V2ray", protocol = "vless" })
-level:depends({ type = "V2ray", protocol = "trojan" })
-
 tls = s:option(Flag, "tls", translate("TLS"))
 tls.default = 0
 tls.validate = function(self, value, t)
@@ -454,8 +445,10 @@ tls:depends("type", "Trojan-Go")
 xtls = s:option(Flag, "xtls", translate("XTLS"))
 xtls.default = 0
 xtls:depends({ type = "Xray", protocol = "vless", tls = "1" })
+xtls:depends({ type = "Xray", protocol = "trojan", tls = "1" })
 
 flow = s:option(Value, "flow", translate("flow"))
+flow.default = "xtls-rprx-direct"
 flow:value("xtls-rprx-origin")
 flow:value("xtls-rprx-origin-udp443")
 flow:value("xtls-rprx-direct")
