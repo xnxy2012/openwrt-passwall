@@ -298,12 +298,6 @@ load_config() {
 	DNS_MODE=$(config_t_get global dns_mode pdnsd)
 	DNS_FORWARD=$(config_t_get global dns_forward 8.8.4.4:53 | sed 's/:/#/g')
 	DNS_CACHE=$(config_t_get global dns_cache 0)
-	process=1
-	if [ "$(config_t_get global_forwarding process 0)" = "0" ]; then
-		process=$(cat /proc/cpuinfo | grep 'processor' | wc -l)
-	else
-		process=$(config_t_get global_forwarding process)
-	fi
 	LOCAL_DNS=$(config_t_get global up_china_dns default | sed 's/:/#/g')
 	if [ "${LOCAL_DNS}" = "default" ]; then
 		DEFAULT_DNS=$(uci show dhcp | grep "@dnsmasq" | grep ".server=" | awk -F '=' '{print $2}' | sed "s/'//g" | tr ' ' ',')
@@ -427,7 +421,6 @@ run_redir() {
 			echolog "$remarks节点，非法的服务器地址，无法启动！"
 			return 1
 		}
-		[ "$server_host" == "127.0.0.1" ] && process=1
 		[ "$bind" != "127.0.0.1" ] && echolog "${REDIR_TYPE}节点：$remarks，节点：${server_host}:${port}，监听端口：$local_port"
 	}
 	eval ${REDIR_TYPE}_NODE_PORT=$port
@@ -508,13 +501,15 @@ run_redir() {
 			local proto="-proto tcp"
 			[ "$UDP_NODE" == "tcp" ] && proto="-proto tcp,udp"
 			local extra_param="${proto}"
-			[ "$(config_t_get global tcp_node_socks 0)" = "1" ] && {
-				local socks_param="-socks_proxy_port $(config_t_get global tcp_node_socks_port 1080)"
+			[ "$tcp_node_socks" = "1" ] && {
+				local socks_param="-socks_proxy_port $tcp_node_socks_port"
 				extra_param="${extra_param} ${socks_param}"
+				config_file=$(echo $config_file | sed "s/TCP/TCP_SOCKS_$tcp_node_socks_id/g")
 			}
-			[ "$(config_t_get global tcp_node_http 0)" = "1" ] && {
-				local http_param="-http_proxy_port $(config_t_get global tcp_node_http_port 1180)"
+			[ "$tcp_node_http" = "1" ] && {
+				local http_param="-http_proxy_port $tcp_node_http_port"
 				extra_param="${extra_param} ${http_param}"
+				config_file=$(echo $config_file | sed "s/TCP/TCP_HTTP_$tcp_node_http_id/g")
 			}
 			lua $API_GEN_XRAY -node $node -redir_port $local_port -loglevel $loglevel $extra_param > $config_file
 			ln_start_bin "$(first_type $(config_t_get global_app xray_file) xray)" xray $log_file -config="$config_file"
@@ -527,9 +522,7 @@ run_redir() {
 		trojan*)
 			local loglevel=$(config_t_get global trojan_loglevel "2")
 			lua $API_GEN_TROJAN -node $node -run_type nat -local_addr "0.0.0.0" -local_port $local_port -loglevel $loglevel > $config_file
-			for k in $(seq 1 $process); do
-				ln_start_bin "$(first_type ${type})" "${type}" $log_file -c "$config_file"
-			done
+			ln_start_bin "$(first_type ${type})" "${type}" $log_file -c "$config_file"
 		;;
 		naiveproxy)
 			lua $API_GEN_NAIVE -node $node -run_type redir -local_addr "0.0.0.0" -local_port $local_port > $config_file
@@ -559,15 +552,12 @@ run_redir() {
 		ss|ssr)
 			if [ "$kcptun_use" == "1" ]; then
 				lua $API_GEN_SS -node $node -local_addr "0.0.0.0" -local_port $local_port -server_host "127.0.0.1" -server_port $KCPTUN_REDIR_PORT > $config_file
-				process=1
 				[ "$UDP_NODE" == "tcp" ] && echolog "Kcptun不支持UDP转发！"
 			else
 				lua $API_GEN_SS -node $node -local_addr "0.0.0.0" -local_port $local_port > $config_file
 				[ "$UDP_NODE" == "tcp" ] && extra_param="-u"
 			fi
-			for k in $(seq 1 $process); do
-				ln_start_bin "$(first_type ${type}-redir)" "${type}-redir" $log_file -c "$config_file" -v $extra_param
-			done
+			ln_start_bin "$(first_type ${type}-redir)" "${type}-redir" $log_file -c "$config_file" -v $extra_param
 		;;
 		esac
 		if [ -n "$_socks_flag" ]; then
@@ -578,14 +568,14 @@ run_redir() {
 		unset _socks_flag _socks_address _socks_port _socks_username _socks_password
 		
 		[ "$type" != "xray" ] && {
-			[ "$(config_t_get global tcp_node_socks 0)" = "1" ] && {
-				local port=$(config_t_get global tcp_node_socks_port 1080)
-				local config_file=$TMP_PATH/SOCKS_TCP.json
-				local log_file=$TMP_PATH/SOCKS_TCP.log
+			[ "$tcp_node_socks" = "1" ] && {
+				local port=$tcp_node_socks_port
+				local config_file=$TMP_PATH/SOCKS_$tcp_node_socks_id.json
+				local log_file=$TMP_PATH/SOCKS_$tcp_node_socks_id.log
 				local http_port=0
-				local http_config_file=$TMP_PATH/HTTP2SOCKS_TCP.json
-				[ "$(config_t_get global tcp_node_http 0)" = "1" ] && {
-					http_port=$(config_t_get global tcp_node_http_port 1180)
+				local http_config_file=$TMP_PATH/HTTP2SOCKS_$tcp_node_http_id.json
+				[ "$tcp_node_http" = "1" ] && {
+					http_port=$tcp_node_http_port
 				}
 				run_socks TCP $TCP_NODE "0.0.0.0" $port $config_file $http_port $http_config_file
 			}
@@ -641,6 +631,17 @@ start_socks() {
 		local log_file=$TMP_PATH/SOCKS_${id}.log
 		local http_port=$(config_n_get $id http_port 0)
 		local http_config_file=$TMP_PATH/HTTP2SOCKS_${id}.json
+		[ "$node" == "tcp" ] && {
+			tcp_node_socks=1
+			tcp_node_socks_port=$port
+			tcp_node_socks_id=$id
+			[ "$http_port" != "0" ] && {
+				tcp_node_http=1
+				tcp_node_http_port=$http_port
+				tcp_node_http_id=$id
+			}
+			continue
+		}
 		run_socks $id $node "0.0.0.0" $port $config_file $http_port $http_config_file
 	done
 }
@@ -1234,15 +1235,7 @@ restart_dnsmasq() {
 }
 
 boot() {
-	[ "$ENABLED" == 1 ] && {
-		local delay=$(config_t_get global_delay start_delay 1)
-		if [ "$delay" -gt 0 ]; then
-			echolog "执行启动延时 $delay 秒后再启动!"
-			sleep $delay && start >/dev/null 2>&1 &
-		else
-			start
-		fi
-	}
+	[ "$ENABLED" == 1 ] && start
 	return 0
 }
 
